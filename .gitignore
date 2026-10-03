@@ -1,0 +1,16 @@
+# Collected data never goes into git
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Secrets and local settings
+.env
+
+# OS
+.DS_Store
+Thumbs.db
