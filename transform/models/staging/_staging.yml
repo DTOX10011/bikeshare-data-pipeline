@@ -1,0 +1,35 @@
+version: 2
+
+# The staging models are views over the raw files, so a data test on one of them would
+# re-read every file ever collected. Their keys are tested on the fact and dimension
+# tables built from them instead (see models/marts/_marts.yml).
+
+models:
+  - name: stg_station_status
+    description: >
+      One row per station per snapshot, read from the raw station_status files.
+      Fields are typed and duplicate station rows within a snapshot are removed.
+    columns:
+      - name: station_id
+        description: The feed's identifier for the station.
+      - name: snapshot_at
+        description: When the feed produced the snapshot (UTC).
+      - name: partition_date
+        description: The date folder the file was read from. Filtering on it skips other folders.
+
+  - name: stg_station_information
+    description: >
+      One row per station per daily snapshot of the reference data (name, location, capacity).
+    columns:
+      - name: station_id
+        description: The feed's identifier for the station.
+      - name: snapshot_at
+        description: When the feed produced the snapshot (UTC).
+
+  - name: stg_weather
+    description: One row per weather reading for the service area. Metric units.
+    columns:
+      - name: observed_at
+        description: Start of the 15-minute step the reading belongs to (UTC).
+      - name: partition_date
+        description: The date folder the file was read from. Filtering on it skips other folders.

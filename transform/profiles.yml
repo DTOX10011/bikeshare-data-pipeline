@@ -1,0 +1,10 @@
+# Connection settings for dbt. There are no secrets here: the warehouse is a local DuckDB file.
+bikeshare:
+  target: local
+  outputs:
+    local:
+      type: duckdb
+      path: "{{ env_var('WAREHOUSE_PATH', 'data/warehouse.duckdb') }}"
+      threads: 4
+      settings:
+        TimeZone: UTC

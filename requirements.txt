@@ -1,2 +1,4 @@
-requests>=2.31
+# Everything needed to run and test the whole pipeline.
+-r requirements-ingest.txt
+dbt-duckdb>=1.11,<2
 pytest>=8.0
