@@ -1,0 +1,60 @@
+name: collect
+
+# Runs the ingestion job on a schedule and saves what it collects to the "data" branch.
+# The code lives on main; the collected data lives on its own branch so it never mixes
+# with code history.
+
+on:
+  schedule:
+    - cron: "5,20,35,50 * * * *"  # every 15 minutes, offset from the busy top of the hour
+  workflow_dispatch:  # also allows a manual run from the Actions tab
+
+permissions:
+  contents: write  # needed to push new snapshots to the data branch
+
+concurrency:
+  group: collect  # never run two collections at once
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the pipeline code
+        uses: actions/checkout@v4
+
+      - name: Check out the data branch
+        uses: actions/checkout@v4
+        with:
+          ref: data
+          path: collected
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: python -m pip install -r requirements.txt
+
+      - name: Collect snapshots
+        id: collect
+        continue-on-error: true  # still save whatever was collected if one source fails
+        run: python -m pipeline.ingest --raw-dir collected/raw
+
+      - name: Save new snapshots to the data branch
+        working-directory: collected
+        run: |
+          git add -A .
+          if git diff --cached --quiet; then
+            echo "Nothing new to save."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "Collect snapshots $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push origin HEAD:data
+
+      - name: Fail the run if any source failed
+        if: steps.collect.outcome == 'failure'
+        run: exit 1
