@@ -12,8 +12,11 @@ flags:
 
 vars:
   # Incremental runs reload this many days before the newest loaded day, so a snapshot that
-  # arrived late for a recent day is still picked up. Older backfills need --full-refresh.
+  # arrived late for a recent day is still picked up.
   lookback_days: 1
+  # A backfill sets both to reload exactly these days (inclusive, YYYY-MM-DD) and nothing else.
+  backfill_start_date: null
+  backfill_end_date: null
   # Times in the raw data are UTC. Riders live in local time.
   local_timezone: "America/New_York"
 

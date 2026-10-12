@@ -39,4 +39,5 @@ select
 from {{ ref('stg_station_status') }}
 {% if is_incremental() %}
 where partition_date >= {{ incremental_start_date(this, 'snapshot_at') }}
+  {{ incremental_end_filter('partition_date') }}
 {% endif %}

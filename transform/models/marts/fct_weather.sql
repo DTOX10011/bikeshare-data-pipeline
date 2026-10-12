@@ -27,4 +27,5 @@ select
 from {{ ref('stg_weather') }}
 {% if is_incremental() %}
 where partition_date >= {{ incremental_start_date(this, 'observed_at') }}
+  {{ incremental_end_filter('partition_date') }}
 {% endif %}
