@@ -14,3 +14,11 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# dbt build output
+transform/target/
+transform/logs/
+transform/.user.yml
+logs/
+*.duckdb
+*.duckdb.wal

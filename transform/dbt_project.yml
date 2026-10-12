@@ -1,0 +1,27 @@
+name: bikeshare
+version: "1.0.0"
+profile: bikeshare
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets: ["target"]
+
+flags:
+  send_anonymous_usage_stats: false
+
+vars:
+  # Incremental runs reload this many days before the newest loaded day, so a snapshot that
+  # arrived late for a recent day is still picked up. Older backfills need --full-refresh.
+  lookback_days: 1
+  # Times in the raw data are UTC. Riders live in local time.
+  local_timezone: "America/New_York"
+
+models:
+  bikeshare:
+    staging:
+      +schema: staging
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table

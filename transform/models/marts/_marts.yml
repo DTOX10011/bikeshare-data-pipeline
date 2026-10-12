@@ -1,0 +1,70 @@
+version: 2
+
+models:
+  - name: dim_station
+    description: >
+      One row per station with its most recent name, location and capacity.
+      Stations seen in status data but not yet in reference data are included with
+      is_inferred = true.
+    columns:
+      - name: station_id
+        description: Primary key. The feed's identifier for the station.
+        data_tests: [not_null, unique]
+      - name: is_inferred
+        description: True when the station is known only from status data so far.
+        data_tests: [not_null]
+      - name: is_in_latest_reference_data
+        description: False once a station no longer appears in the newest reference snapshot.
+        data_tests: [not_null]
+
+  - name: fct_station_status
+    description: >
+      One row per station per snapshot: bikes and docks available at that moment.
+    columns:
+      - name: station_snapshot_key
+        description: Primary key, built from station_id and snapshot_at.
+        data_tests: [not_null, unique]
+      - name: station_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_station')
+                field: station_id
+      - name: snapshot_at
+        description: When the feed produced the snapshot (UTC).
+        data_tests: [not_null]
+      - name: num_classic_bikes_available
+        description: Bikes available minus e-bikes available. The feed's bike count includes e-bikes.
+      - name: is_empty
+        description: In service and renting, with no bikes available.
+        data_tests: [not_null]
+      - name: is_full
+        description: In service and accepting returns, with no docks available.
+        data_tests: [not_null]
+
+  - name: fct_weather
+    description: One row per 15-minute weather reading for the service area. Metric units.
+    columns:
+      - name: observed_at
+        description: Primary key. Start of the 15-minute step the reading belongs to (UTC).
+        data_tests: [not_null, unique]
+
+  - name: agg_station_hourly
+    description: >
+      One row per station per hour, with availability statistics and that hour's weather.
+    columns:
+      - name: station_hour_key
+        description: Primary key, built from station_id and hour_utc.
+        data_tests: [not_null, unique]
+      - name: station_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_station')
+                field: station_id
+      - name: hour_local
+        description: The hour in local time for the service area.
+      - name: share_of_snapshots_empty
+        description: Share of the hour's snapshots in which the station was empty (0 to 1).
