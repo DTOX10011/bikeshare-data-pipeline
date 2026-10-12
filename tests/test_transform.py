@@ -115,6 +115,9 @@ def make_raw_zone(raw):
     land_weather(raw, "2026-10-03T21:30:00", 19.0)
     land_weather(raw, "2026-10-03T22:00:00", 16.0)
     land_weather(raw, "2026-10-04T00:00:00", 12.0)
+    # The run log the ingest job keeps next to the raw folder.
+    started = utc("2026-10-04T00:10:30")
+    ingest.append_run_log(raw.parent / "run_log", started, started, [ingest.Result("station_status", ingest.WRITTEN)])
 
 
 class Warehouse:
@@ -137,6 +140,7 @@ class Warehouse:
 
     def copy_to(self, folder) -> "Warehouse":
         shutil.copytree(self.raw, folder / "raw")
+        shutil.copytree(self.raw.parent / "run_log", folder / "run_log")
         shutil.copy(self.path, folder / "warehouse.duckdb")
         return Warehouse(folder)
 
@@ -361,5 +365,5 @@ def test_main_stops_with_a_clear_message_when_a_source_has_no_data(tmp_path, cap
     code = transform.main(["--raw-dir", str(tmp_path / "raw"), "--warehouse", str(tmp_path / "w.duckdb")])
 
     assert code == 2
-    assert "station_information, station_status" in capsys.readouterr().err
+    assert "station_information, station_status, run log" in capsys.readouterr().err
     assert not (tmp_path / "w.duckdb").exists()

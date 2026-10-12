@@ -34,8 +34,26 @@ models:
       - name: snapshot_at
         description: When the feed produced the snapshot (UTC).
         data_tests: [not_null]
+      - name: num_bikes_available
+        data_tests:
+          - non_negative:
+              config: {severity: warn}
+      - name: num_ebikes_available
+        data_tests:
+          - non_negative:
+              config: {severity: warn}
+      - name: num_docks_available
+        data_tests:
+          - non_negative:
+              config: {severity: warn}
       - name: num_classic_bikes_available
         description: Bikes available minus e-bikes available. The feed's bike count includes e-bikes.
+      - name: unreadable_value_count
+        description: How many fields in the raw row held a value that could not be read.
+        data_tests: [not_null]
+      - name: duplicates_removed
+        description: How many extra copies of this row were in the same snapshot and removed.
+        data_tests: [not_null]
       - name: is_empty
         description: In service and renting, with no bikes available.
         data_tests: [not_null]

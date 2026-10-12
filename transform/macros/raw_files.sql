@@ -5,3 +5,8 @@
 {% macro raw_files(source_name) -%}
     '{{ env_var("RAW_DIR", "data/raw") }}/{{ source_name }}/*/*/*.json.gz'
 {%- endmacro %}
+
+{# Path pattern for every day's run log written by the ingest job. #}
+{% macro run_log_files() -%}
+    '{{ env_var("RUN_LOG_DIR", "data/run_log") }}/*/runs.jsonl'
+{%- endmacro %}

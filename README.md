@@ -4,7 +4,7 @@ A data pipeline that collects live bike share station data and weather, stores i
 
 Bike share systems publish how many bikes and docks every station has, refreshed about once a minute. Each refresh replaces the last, so the history is lost unless someone collects it. This pipeline collects it, alongside the weather at the time, and the goal is to answer questions such as which stations run empty, when, and how weather changes demand.
 
-**Status: in progress.** Milestones 1 to 3 are built and tested: raw ingestion, weather, scheduled collection, and the SQL model. The later stages are planned, and this README is updated as each one lands.
+**Status: in progress.** Milestones 1 to 4 are built and tested: raw ingestion, weather, scheduled collection, the SQL model, and data quality checks. The later stages are planned, and this README is updated as each one lands.
 
 ## Architecture
 
@@ -17,9 +17,11 @@ flowchart LR
     B --> L[Run log<br>one record per run]
     C --> D[Staging<br>typed, deduplicated views<br>dbt + DuckDB]
     D --> E[Analytics model<br>fact, dimension and hourly tables]
+    D --> Q[Quality tables<br>quarantine, collection runs, daily summary]
+    L --> Q
+    E --> G[Data quality checks<br>errors and warnings]
+    Q --> G
     E -.-> F[Dashboard]
-    G[Data quality tests] -.-> D
-    G -.-> E
 ```
 
 Solid lines are built. Dotted lines are planned.
@@ -29,9 +31,9 @@ Solid lines are built. Dotted lines are planned.
 | # | Stage | Status |
 |---|-------|--------|
 | 1 | Raw ingestion of station feeds, with tests and automated checks | Done |
-| 2 | Weather ingestion, a run log, and a scheduled collection job | Done; verified by a manual run, first automatic run not yet observed |
+| 2 | Weather ingestion, a run log, and a scheduled collection job | Done; GitHub's schedule runs far less often than asked (see [what the checks found](#what-the-checks-found)) |
 | 3 | Staging views and an analytics model in SQL (dbt + DuckDB) | Done |
-| 4 | Data quality tests on every stage | Planned |
+| 4 | Data quality checks, quarantine, and a daily quality summary | Done |
 | 5 | Orchestration with retries and backfills | Planned |
 | 6 | Docker packaging and a dashboard | Planned |
 
@@ -52,7 +54,7 @@ python -m pip install -r requirements.txt
 python -m pytest                        # run the tests
 python -m pipeline.ingest               # collect one snapshot of each source
 python -m pipeline.ingest --every 900   # keep collecting every 15 minutes until stopped
-python -m pipeline.transform            # build the warehouse tables from what was collected
+python -m pipeline.transform            # build the warehouse tables and check the data's quality
 ```
 
 Each run writes files like this:
@@ -78,7 +80,7 @@ git worktree add ../bikeshare-data data   # the data appears in a sibling folder
 
 If one source fails, the workflow still saves what the other sources returned, then marks the run as failed so the problem is visible in the Actions tab.
 
-GitHub does not guarantee scheduled workflows start on time, so gaps between snapshots vary. The run log records when each run happened, which lets later stages measure those gaps instead of assuming a fixed interval.
+GitHub does not guarantee scheduled workflows start on time, and in practice this one runs far less often than every 15 minutes (see [what the checks found](#what-the-checks-found)). The run log records when each run happened, so the gaps are measured rather than assumed. Replacing the scheduler is part of milestone 5.
 
 ## The warehouse
 
@@ -128,6 +130,52 @@ order by share_of_time_empty desc
 limit 10;
 ```
 
+## Data quality
+
+`python -m pipeline.transform` runs every check after building the tables and lists any warnings at the end. Checks come in two strengths:
+
+| Level | Meaning | Examples | What happens |
+|-------|---------|----------|--------------|
+| Error | The pipeline itself is wrong | A duplicate primary key, a fact row with no station, an unknown run status | The command fails |
+| Warning | The data has a problem worth knowing about | A gap in collection, stations that stopped reporting, a value that could not be read | The tables are still built and the warning is listed |
+
+The warnings, with the limits set in [`dbt_project.yml`](transform/dbt_project.yml):
+
+| Check | Warns when |
+|-------|-----------|
+| `assert_station_status_is_fresh` | The newest snapshot is more than 60 minutes old |
+| `assert_no_long_gaps_between_snapshots` | Two snapshots in the last 24 hours are more than 45 minutes apart |
+| `assert_no_failed_collections` | A source failed in a collection run in the last 24 hours |
+| `assert_no_recent_quarantined_rows` | Station rows were rejected in the last 24 hours |
+| `assert_unreadable_values_are_rare` | More than 0.1% of the last 24 hours' rows had a value that could not be read |
+| `assert_capacity_is_mostly_respected` | More than 1% of the last 24 hours' rows show more bikes plus docks than the station holds |
+| `assert_open_stations_are_reporting` | More than 2% of open stations in the newest snapshot have not reported for 2 hours |
+| `assert_ebikes_within_total_bikes` | A row reports more e-bikes than bikes |
+| `non_negative` | A bike or dock count is below zero |
+
+Three tables in the `quality` schema hold the detail behind the checks:
+
+| Table | One row per | What it holds |
+|-------|-------------|---------------|
+| `quality.quarantine_station_status` | Rejected station row | Rows with no station id or no snapshot time, with the reason and the raw row |
+| `quality.fct_collection_run` | Source per collection run | The run log as a table: status, duration, error, and minutes since the previous run |
+| `quality.dq_daily_summary` | UTC day | Snapshots collected against the 96 a 15-minute schedule would give, the longest gap, failed runs, and rejected, unreadable and duplicate rows |
+
+Every station row in `fct_station_status` also records how many of its values could not be read (`unreadable_value_count`) and how many duplicate copies of it were removed (`duplicates_removed`).
+
+### What the checks found
+
+Run against the data collected from 10 to 12 October 2026, the checks raised two warnings, both about collection rather than the data itself:
+
+- **GitHub's schedule runs far less often than asked.** Instead of every 15 minutes, it ran 10 times in about 40 hours, with gaps of 148 to 433 minutes. Each day held 2 to 5% of the snapshots a 15-minute schedule would give. Every run succeeded, and each took under a second.
+- **The data itself was clean.** No rows were rejected, no values were unreadable, and no counts were negative.
+
+Things the checks deliberately do not warn about, because the real feed does them all the time:
+
+- **Closed stations that never report.** 52 stations have no usable report time and about 10 more last reported over a day ago. Almost all are not installed, so the reporting check only looks at stations that say they are open. None of those were silent.
+- **Small capacity overruns.** 24 of 25,190 rows reported more bikes plus docks than the station's capacity, by at most three. That is 0.1%, so the check only warns above 1%.
+- **Stations with zero capacity.** 38 stations list a capacity of 0. The capacity check skips them.
+
 ## The run log
 
 Every run appends one line to `run_log/dt=YYYY-MM-DD/runs.jsonl`:
@@ -169,11 +217,19 @@ Each source ends a run with one of four statuses:
 
 **Staging reads the raw files directly, and bad values become nulls.** Each field is cast with `try_cast`, so one unreadable number costs one null in one row instead of a failed load. Fields the model does not use yet stay in the raw files.
 
-**The fact tables load incrementally.** Each run reloads only the newest loaded day and the day before it, then replaces any rows it already had for those days (delete and insert on the primary key). Running it twice gives the same tables. The date filter is applied to the folder names, so an incremental run never opens older folders. On three days of full-size data (288 snapshots, about 725,000 rows) a full build takes about six seconds.
+**The fact tables load incrementally.** Each run reloads only the newest loaded day and the day before it, then replaces any rows it already had for those days (delete and insert on the primary key). Running it twice gives the same tables. The date filter is applied to the folder names, so an incremental run never opens older folders. On three days of full-size data (288 snapshots, about 725,000 rows), a full build including all 37 data tests takes about 12 seconds, and an incremental run about 10.
 
 **Backfills use a full refresh.** A file that arrives for a day older than the lookback window is not picked up by an incremental run. Because the raw zone is complete and never changes, `python -m pipeline.transform --full-refresh` rebuilds every table from it.
 
 **Every fact row has a station to join to.** A station that reports status before its reference data arrives gets a placeholder row in `dim_station`, flagged `is_inferred`. A later run fills in its details.
+
+**Bad rows are kept, not dropped.** A station row with no station id cannot be used, but it goes to a quarantine table with the reason instead of disappearing. A value that cannot be read becomes a null, and the row records that it happened. Problems are counted, so they can be checked.
+
+**Warnings for the data, errors for the pipeline.** A missed collection or a silent station is a fact about the world: the tables should still be built, and the problem reported. A duplicate key means the code is wrong, so the run stops.
+
+**Thresholds come from the real data.** Each limit was set after measuring what the feed normally does, so the checks stay quiet on ordinary behaviour and speak up when something changes.
+
+**The checks can be run as of any time.** They measure "now" from a setting that defaults to the real time. The tests fix it, so they give the same result whenever they run.
 
 **Empty and full only count while a station is in service.** A station that is switched off has no bikes to rent, but that is an outage, not a shortage, so it is not counted as empty.
 
@@ -182,6 +238,8 @@ Each source ends a run with one of four statuses:
 - **A station added mid-day has no details until the next day.** Its status rows are kept and it gets a placeholder row in `dim_station`, but its name, location and capacity stay empty until the next daily reference snapshot.
 - **`dim_station` keeps only the latest details.** If a station is renamed or resized, earlier facts join to the new values. The daily reference snapshots are all in the raw zone, so a history-keeping (type 2) version can be built from them later.
 - **The hourly table is rebuilt in full on every run.** Only the fact tables load incrementally. That is fast at this size and will need the same treatment as history grows.
+- **The thresholds rest on a few days of data.** They should be revisited once weeks of history exist.
+- **Quarantine reads recent raw files a second time.** Together with the new checks, that roughly doubled build time at this size.
 - **The warehouse is a single local file.** DuckDB suits a project of this size and needs no server. The models are plain dbt SQL, so moving to a hosted warehouse means changing the connection profile and the file-reading step in staging.
 - **One weather point stands in for the whole service area.** Conditions in the Bronx and in Jersey City are treated as the same as Manhattan's.
 - **Weather is only collected going forward.** If a run is missed, that 15-minute reading is not recovered. Backfilling from a historical weather source is planned with the orchestration stage.

@@ -1,0 +1,32 @@
+version: 2
+
+models:
+  - name: fct_collection_run
+    description: One row per source per collection run, read from the ingest job's run log.
+    columns:
+      - name: run_source_key
+        description: Primary key, built from run_id, source and the run's start time.
+        data_tests: [not_null, unique]
+      - name: status
+        description: What happened to the source in that run.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [written, skipped_duplicate, skipped_not_due, failed]
+      - name: minutes_since_previous_run
+        description: Minutes since the previous run that collected the same source.
+
+  - name: quarantine_station_status
+    description: Station rows that could not be used (no station id, or no snapshot time), kept with the reason.
+    columns:
+      - name: rejection_reason
+        data_tests: [not_null]
+
+  - name: dq_daily_summary
+    description: One row per UTC day showing how complete and how clean that day's data is.
+    columns:
+      - name: day
+        data_tests: [not_null, unique]
+      - name: share_of_expected_snapshots
+        description: Station snapshots collected divided by 96, the number a 15-minute schedule would give.

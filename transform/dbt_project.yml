@@ -17,6 +17,16 @@ vars:
   # Times in the raw data are UTC. Riders live in local time.
   local_timezone: "America/New_York"
 
+  # Data quality thresholds. Breaking one is reported as a warning (see tests/).
+  max_minutes_since_last_snapshot: 60       # newest snapshot older than this: collection stopped
+  max_minutes_between_snapshots: 45         # a longer gap in the last 24 hours: runs were missed
+  silent_station_minutes: 120               # an open station that has not reported for this long
+  max_share_silent_in_service_stations: 0.02
+  max_share_rows_over_capacity: 0.01
+  max_share_rows_with_unreadable_values: 0.001
+  # The checks measure "now" from this UTC time. Leave unset to use the real time.
+  quality_as_of: null
+
 models:
   bikeshare:
     staging:
@@ -24,4 +34,7 @@ models:
       +materialized: view
     marts:
       +schema: marts
+      +materialized: table
+    quality:
+      +schema: quality
       +materialized: table
