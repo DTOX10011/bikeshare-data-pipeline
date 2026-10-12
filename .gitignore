@@ -22,3 +22,7 @@ transform/.user.yml
 logs/
 *.duckdb
 *.duckdb.wal
+
+# Dagster's local run history
+.tmp_dagster_home_*/
+dagster_home/

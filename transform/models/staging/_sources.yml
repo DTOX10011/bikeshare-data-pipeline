@@ -1,0 +1,18 @@
+version: 2
+
+# The files the ingest job writes. Staging reads them straight from disk with DuckDB, so these
+# are not tables; they are declared here so that the lineage graph starts at the raw data.
+# The orchestrator knows them as the assets raw/station_status, raw/weather and so on.
+
+sources:
+  - name: raw
+    description: Raw snapshots and the run log, as written by the ingest job.
+    tables:
+      - name: station_status
+        description: raw/station_status/dt=YYYY-MM-DD/hour=HH/*.json.gz
+      - name: station_information
+        description: raw/station_information/dt=YYYY-MM-DD/hour=HH/*.json.gz
+      - name: weather
+        description: raw/weather/dt=YYYY-MM-DD/hour=HH/*.json.gz
+      - name: run_log
+        description: run_log/dt=YYYY-MM-DD/runs.jsonl

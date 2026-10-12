@@ -22,4 +22,5 @@ select
 from {{ ref('stg_station_status_rejected') }}
 {% if is_incremental() %}
 where partition_date >= {{ incremental_start_date(ref('fct_station_status'), 'snapshot_at') }}
+  {{ incremental_end_filter('partition_date') }}
 {% endif %}

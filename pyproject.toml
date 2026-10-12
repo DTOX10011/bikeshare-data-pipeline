@@ -1,0 +1,3 @@
+# Lets "dagster dev" find the pipeline's definitions without extra arguments.
+[tool.dagster]
+module_name = "orchestration"

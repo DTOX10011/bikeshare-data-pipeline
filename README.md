@@ -4,7 +4,7 @@ A data pipeline that collects live bike share station data and weather, stores i
 
 Bike share systems publish how many bikes and docks every station has, refreshed about once a minute. Each refresh replaces the last, so the history is lost unless someone collects it. This pipeline collects it, alongside the weather at the time, and the goal is to answer questions such as which stations run empty, when, and how weather changes demand.
 
-**Status: in progress.** Milestones 1 to 4 are built and tested: raw ingestion, weather, scheduled collection, the SQL model, and data quality checks. The later stages are planned, and this README is updated as each one lands.
+**Status: in progress.** Milestones 1 to 5 are built and tested: raw ingestion, weather, scheduled collection, the SQL model, data quality checks, and orchestration with Dagster. Packaging and a dashboard are next, and this README is updated as each stage lands.
 
 ## Architecture
 
@@ -12,7 +12,8 @@ Bike share systems publish how many bikes and docks every station has, refreshed
 flowchart LR
     A[Citi Bike GBFS feeds] --> B[Ingest job<br>Python]
     W[Open-Meteo weather API] --> B
-    H[Scheduler<br>GitHub Actions, every 15 min] --> B
+    T[Outside cron service<br>every 15 min] --> H[GitHub Actions<br>collect workflow]
+    H --> B
     B --> C[Raw zone<br>unchanged JSON, partitioned by date and hour]
     B --> L[Run log<br>one record per run]
     C --> D[Staging<br>typed, deduplicated views<br>dbt + DuckDB]
@@ -21,6 +22,7 @@ flowchart LR
     L --> Q
     E --> G[Data quality checks<br>errors and warnings]
     Q --> G
+    O[Dagster<br>hourly refresh, retries, backfills] --> D
     E -.-> F[Dashboard]
 ```
 
@@ -34,7 +36,7 @@ Solid lines are built. Dotted lines are planned.
 | 2 | Weather ingestion, a run log, and a scheduled collection job | Done; GitHub's schedule runs far less often than asked (see [what the checks found](#what-the-checks-found)) |
 | 3 | Staging views and an analytics model in SQL (dbt + DuckDB) | Done |
 | 4 | Data quality checks, quarantine, and a daily quality summary | Done |
-| 5 | Orchestration with retries and backfills | Planned |
+| 5 | Reliable 15-minute collection, and orchestration with Dagster (schedule, retries, backfills) | Done |
 | 6 | Docker packaging and a dashboard | Planned |
 
 ## What it collects
@@ -55,6 +57,7 @@ python -m pytest                        # run the tests
 python -m pipeline.ingest               # collect one snapshot of each source
 python -m pipeline.ingest --every 900   # keep collecting every 15 minutes until stopped
 python -m pipeline.transform            # build the warehouse tables and check the data's quality
+dagster dev                             # open the orchestrator at http://localhost:3000
 ```
 
 Each run writes files like this:
@@ -69,7 +72,20 @@ Run it again within the same minute and the station feed reports `skipped_duplic
 
 ## Scheduled collection
 
-A GitHub Actions workflow ([`collect.yml`](.github/workflows/collect.yml)) runs the ingest job every 15 minutes and saves what it collects to a separate `data` branch of this repository. The code on `main` and the collected data never share history.
+A GitHub Actions workflow ([`collect.yml`](.github/workflows/collect.yml)) runs the ingest job and saves what it collects to a separate `data` branch of this repository. The code on `main` and the collected data never share history.
+
+**What starts it.** GitHub's own scheduler was tried first and measured: asked to run every 15 minutes, it ran 10 times in about 40 hours, with gaps of two to seven hours (see [what the checks found](#what-the-checks-found)). So the workflow is started by an outside cron service instead, which calls GitHub's API every 15 minutes. GitHub's schedule stays on, once an hour, as a backup. Extra runs are harmless, because a snapshot that is already stored is skipped.
+
+To set up the outside trigger (free, about ten minutes):
+
+1. On GitHub, create a fine-grained personal access token with access to this repository only and one permission: **Actions: Read and write**. Note its expiry date.
+2. On [cron-job.org](https://cron-job.org), create a job that runs every 15 minutes and sends:
+   - `POST https://api.github.com/repos/DTOX10011/bikeshare-data-pipeline/actions/workflows/collect.yml/dispatches`
+   - headers `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28` and `Content-Type: application/json`
+   - body `{"ref": "main"}`
+3. A test run should return `204`, and a new run appears in the repository's Actions tab.
+
+The token can only start this repository's workflows, so the worst a leaked token could do is run an extra collection. If it expires, the freshness check starts warning.
 
 To get the collected data next to the code:
 
@@ -79,8 +95,6 @@ git worktree add ../bikeshare-data data   # the data appears in a sibling folder
 ```
 
 If one source fails, the workflow still saves what the other sources returned, then marks the run as failed so the problem is visible in the Actions tab.
-
-GitHub does not guarantee scheduled workflows start on time, and in practice this one runs far less often than every 15 minutes (see [what the checks found](#what-the-checks-found)). The run log records when each run happened, so the gaps are measured rather than assumed. Replacing the scheduler is part of milestone 5.
 
 ## The warehouse
 
@@ -176,6 +190,32 @@ Things the checks deliberately do not warn about, because the real feed does the
 - **Small capacity overruns.** 24 of 25,190 rows reported more bikes plus docks than the station's capacity, by at most three. That is 0.1%, so the check only warns above 1%.
 - **Stations with zero capacity.** 38 stations list a capacity of 0. The capacity check skips them.
 
+## Orchestration
+
+[Dagster](https://dagster.io/) runs everything after collection, from the definitions in [`orchestration/`](orchestration/definitions.py). It knows the whole pipeline as a graph of assets, from each raw source through every dbt model, and shows every dbt test as a check on the asset it tests.
+
+```bash
+set BIKESHARE_DATA_DIR=..\bikeshare-data      # Windows; on macOS or Linux use export
+dagster dev                                    # then open http://localhost:3000
+```
+
+`BIKESHARE_DATA_DIR` is the folder holding `raw/` and `run_log/`: the worktree of the `data` branch from above, or `data` (the default) when collecting locally.
+
+| What | Does | When |
+|------|------|------|
+| `collected_data` | Pulls the newest snapshots from the `data` branch (when the folder is a git checkout) | Every hour, with `refresh_warehouse` |
+| `warehouse` | Runs the dbt project: staging, facts, dimensions, quality tables and every check | Every hour, with `refresh_warehouse` |
+| `refresh_warehouse` job | Both of the above, in order | Every hour at ten past, on a schedule that is on from the start |
+| `reload_days` job | The warehouse only, for a chosen range of days | When launched, with the dates set in its run config |
+
+**Retries.** Pulling from GitHub is retried three times, waiting 30 seconds, then 90, then 210. The warehouse build is retried once after a minute, which covers the DuckDB file being briefly locked by another program.
+
+**Backfills.** `reload_days` reloads exactly the chosen days from the raw files and leaves every other day alone. It replaces the full refresh that milestone 3 needed for a day older than the lookback window. The same works without Dagster:
+
+```bash
+python -m pipeline.transform --backfill 2026-10-01 2026-10-03
+```
+
 ## The run log
 
 Every run appends one line to `run_log/dt=YYYY-MM-DD/runs.jsonl`:
@@ -219,7 +259,11 @@ Each source ends a run with one of four statuses:
 
 **The fact tables load incrementally.** Each run reloads only the newest loaded day and the day before it, then replaces any rows it already had for those days (delete and insert on the primary key). Running it twice gives the same tables. The date filter is applied to the folder names, so an incremental run never opens older folders. On three days of full-size data (288 snapshots, about 725,000 rows), a full build including all 37 data tests takes about 12 seconds, and an incremental run about 10.
 
-**Backfills use a full refresh.** A file that arrives for a day older than the lookback window is not picked up by an incremental run. Because the raw zone is complete and never changes, `python -m pipeline.transform --full-refresh` rebuilds every table from it.
+**Backfills reload chosen days.** A file that arrives for a day older than the lookback window is not picked up by an incremental run. A backfill names the days to reload, and the incremental models replace exactly those days. Because the raw zone is complete and never changes, `python -m pipeline.transform --full-refresh` can also rebuild every table from it.
+
+**A scheduler is judged by what it delivers.** GitHub's schedule was kept until the run log showed it missing most of its slots. The fix changes only what starts the workflow; collection itself, and everything after it, stayed the same.
+
+**Collection runs in the cloud, the warehouse runs where it is used.** Collecting must never stop, so it runs on GitHub. Building the warehouse can catch up at any time from the raw files, so Dagster runs it hourly on the machine that queries it.
 
 **Every fact row has a station to join to.** A station that reports status before its reference data arrives gets a placeholder row in `dim_station`, flagged `is_inferred`. A later run fills in its details.
 
@@ -242,7 +286,9 @@ Each source ends a run with one of four statuses:
 - **Quarantine reads recent raw files a second time.** Together with the new checks, that roughly doubled build time at this size.
 - **The warehouse is a single local file.** DuckDB suits a project of this size and needs no server. The models are plain dbt SQL, so moving to a hosted warehouse means changing the connection profile and the file-reading step in staging.
 - **One weather point stands in for the whole service area.** Conditions in the Bronx and in Jersey City are treated as the same as Manhattan's.
-- **Weather is only collected going forward.** If a run is missed, that 15-minute reading is not recovered. Backfilling from a historical weather source is planned with the orchestration stage.
+- **Weather is only collected going forward.** If a run is missed, that 15-minute reading is not recovered. A historical weather source could fill gaps, but it is not built.
+- **Dagster runs only while its machine is on.** Collection does not depend on it, and the hourly refresh catches up from the raw files when Dagster starts again.
+- **The outside trigger depends on a token that expires.** It has to be renewed on GitHub and updated on cron-job.org. The freshness check warns when collection stops.
 - **Storing data on a git branch does not scale.** It costs nothing and needs no accounts, which suits a project of this size, but the branch grows with every run. Object storage such as S3 is the right home for a raw zone, and moving to it only changes the workflow's save step.
 
 ## Data sources

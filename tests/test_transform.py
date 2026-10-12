@@ -367,3 +367,45 @@ def test_main_stops_with_a_clear_message_when_a_source_has_no_data(tmp_path, cap
     assert code == 2
     assert "station_information, station_status, run log" in capsys.readouterr().err
     assert not (tmp_path / "w.duckdb").exists()
+
+
+def test_backfill_reloads_exactly_the_chosen_days(fresh):
+    # Two late files: one for a day older than the lookback window, one for the newest day.
+    land_stations(fresh.raw, STATUS, "2026-09-20T12:00:05", [status_row("A", bikes=11, docks=9)])
+    land_stations(fresh.raw, STATUS, "2026-10-04T00:40:05", [status_row("A", bikes=12, docks=8)])
+
+    assert transform.run_dbt(
+        fresh.raw, fresh.path, quiet=True,
+        dbt_vars={"backfill_start_date": "2026-09-20", "backfill_end_date": "2026-09-20"},
+    )
+
+    # The chosen day is loaded without a full refresh; the day outside the range is untouched.
+    assert fresh.one(STATUS_AT.format("num_bikes_available"), "A", at("2026-09-20T12:00:05")) == (11,)
+    assert fresh.query(STATUS_AT.format("num_bikes_available"), "A", at("2026-10-04T00:40:05")) == []
+    assert fresh.one("select count(*) from marts.fct_station_status") == (20,)
+
+
+def test_backfill_option_passes_the_dates_to_dbt(tmp_path, monkeypatch):
+    land_weather(tmp_path / "raw", "2026-10-03T21:00:00", 17.0)
+    land_stations(tmp_path / "raw", STATUS, "2026-10-03T21:04:05", [status_row("A", bikes=1, docks=1)])
+    land_stations(tmp_path / "raw", INFORMATION, "2026-10-03T21:00:00", [info_row("A", "Alpha St", 2)])
+    started = utc("2026-10-03T21:05:00")
+    ingest.append_run_log(tmp_path / "run_log", started, started, [ingest.Result("weather", ingest.WRITTEN)])
+    calls = []
+    monkeypatch.setattr(transform, "run_dbt", lambda *args, **kwargs: calls.append(kwargs) or True)
+    monkeypatch.setattr(transform, "check_results", lambda *args: [])
+
+    code = transform.main(["--raw-dir", str(tmp_path / "raw"), "--backfill", "2026-10-01", "2026-10-03"])
+
+    assert code == 0
+    assert calls[0]["dbt_vars"] == {"backfill_start_date": "2026-10-01", "backfill_end_date": "2026-10-03"}
+
+
+@pytest.mark.parametrize("args", [
+    ["--backfill", "2026-10-05", "2026-10-01"],
+    ["--backfill", "2026-10-01", "2026-10-02", "--full-refresh"],
+    ["--backfill", "yesterday", "2026-10-02"],
+])
+def test_backfill_option_rejects_bad_input(args):
+    with pytest.raises(SystemExit):
+        transform.main(args)

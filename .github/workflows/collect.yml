@@ -5,9 +5,14 @@ name: collect
 # with code history.
 
 on:
+  # The main trigger: an outside cron service calls GitHub's API every 15 minutes to start
+  # this workflow (see "Scheduled collection" in the README). GitHub's own schedule proved
+  # far too irregular for that: gaps of two to seven hours in testing.
+  workflow_dispatch:
+  # A backup in case the outside service stops. Extra runs are harmless: a snapshot that is
+  # already stored is skipped.
   schedule:
-    - cron: "5,20,35,50 * * * *"  # every 15 minutes, offset from the busy top of the hour
-  workflow_dispatch:  # also allows a manual run from the Actions tab
+    - cron: "17 * * * *"
 
 permissions:
   contents: write  # needed to push new snapshots to the data branch

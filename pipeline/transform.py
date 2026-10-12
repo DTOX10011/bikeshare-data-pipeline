@@ -12,10 +12,12 @@ Usage:
     python -m pipeline.transform                          # raw data in data/raw
     python -m pipeline.transform --raw-dir ../bikeshare-data/raw
     python -m pipeline.transform --full-refresh           # rebuild every table from all raw files
+    python -m pipeline.transform --backfill 2026-10-01 2026-10-03   # reload just those days
 """
 
 import argparse
 import json
+from datetime import date
 import os
 import subprocess
 import sys
@@ -135,7 +137,19 @@ def main(argv=None) -> int:
         "--full-refresh", action="store_true",
         help="rebuild every table from all raw files instead of loading only recent days",
     )
+    parser.add_argument(
+        "--backfill", nargs=2, metavar=("START", "END"), type=date.fromisoformat,
+        help="reload exactly the days from START to END (YYYY-MM-DD, inclusive) and nothing else",
+    )
     args = parser.parse_args(argv)
+    if args.backfill and args.backfill[0] > args.backfill[1]:
+        parser.error("--backfill START must not be after END")
+    if args.backfill and args.full_refresh:
+        parser.error("use either --backfill or --full-refresh, not both")
+    dbt_vars = (
+        {"backfill_start_date": args.backfill[0].isoformat(), "backfill_end_date": args.backfill[1].isoformat()}
+        if args.backfill else None
+    )
     run_log_dir = args.run_log_dir or default_run_log_dir(args.raw_dir)
 
     missing = missing_inputs(args.raw_dir, run_log_dir)
@@ -148,7 +162,7 @@ def main(argv=None) -> int:
         )
         return 2
 
-    succeeded = run_dbt(args.raw_dir, args.warehouse, args.full_refresh, run_log_dir=run_log_dir)
+    succeeded = run_dbt(args.raw_dir, args.warehouse, args.full_refresh, run_log_dir=run_log_dir, dbt_vars=dbt_vars)
     print_warnings(check_results())
     return 0 if succeeded else 1
 
