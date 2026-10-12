@@ -5,6 +5,15 @@ version: 2
 # tables built from them instead (see models/marts/_marts.yml).
 
 models:
+  - name: base_station_status_rows
+    description: Every station row of every raw station_status file, before any typing or checks.
+
+  - name: stg_station_status_rejected
+    description: Station rows with no station id or no readable snapshot time, with the reason.
+
+  - name: stg_run_log
+    description: One row per source per collection run, read from the ingest job's run log.
+
   - name: stg_station_status
     description: >
       One row per station per snapshot, read from the raw station_status files.

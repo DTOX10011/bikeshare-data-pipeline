@@ -31,6 +31,10 @@ select
     coalesce(is_installed and is_renting and num_bikes_available = 0, false) as is_empty,
     coalesce(is_installed and is_returning and num_docks_available = 0, false) as is_full,
     last_reported_at,
+    -- Data quality: fields whose value could not be read, and extra copies of this row
+    -- that were removed from the same snapshot.
+    unreadable_value_count,
+    duplicates_removed,
     source_file
 from {{ ref('stg_station_status') }}
 {% if is_incremental() %}
