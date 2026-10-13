@@ -1,6 +1,5 @@
 # Everything needed to run and test the whole pipeline.
--r requirements-ingest.txt
-dbt-duckdb>=1.11,<2
+-r requirements-warehouse.txt
 dagster>=1.13,<2
 dagster-dbt>=0.29,<1
 dagster-webserver>=1.13,<2

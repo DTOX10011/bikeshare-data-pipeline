@@ -1,0 +1,801 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bike share availability, every 15 minutes</title>
+<meta name="description" content="Live results from a data pipeline that collects New York bike share station data every 15 minutes.">
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series: #2a78d6;
+    --series-wash: rgba(42, 120, 214, 0.10);
+    --gap-wash: rgba(137, 135, 129, 0.10);
+    --never: #c3c2b7;
+    --ramp-1: #86b6ef;
+    --ramp-2: #3987e5;
+    --ramp-3: #1c5cab;
+    --ramp-4: #0d366b;
+    --track: #cde2fb;
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --good-text: #006300;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #f0efec;
+      --ink-2: #c3c2b7;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series: #3987e5;
+      --series-wash: rgba(57, 135, 229, 0.14);
+      --gap-wash: rgba(137, 135, 129, 0.12);
+      --never: #52514e;
+      --ramp-1: #184f95;
+      --ramp-2: #2a78d6;
+      --ramp-3: #6da7ec;
+      --ramp-4: #cde2fb;
+      --track: #184f95;
+      --good-text: #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series: #3987e5;
+    --series-wash: rgba(57, 135, 229, 0.14);
+    --gap-wash: rgba(137, 135, 129, 0.12);
+    --never: #52514e;
+    --ramp-1: #184f95;
+    --ramp-2: #2a78d6;
+    --ramp-3: #6da7ec;
+    --ramp-4: #cde2fb;
+    --track: #184f95;
+    --good-text: #0ca30c;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 16px/1.5 var(--sans);
+  }
+  a { color: inherit; text-underline-offset: 3px; }
+  a:hover { color: var(--series); }
+  :focus-visible { outline: 2px solid var(--series); outline-offset: 2px; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+
+  header.top {
+    display: flex; flex-wrap: wrap; gap: 4px 16px;
+    justify-content: space-between; align-items: baseline;
+    padding: 20px 0 0;
+    font-size: 14px; color: var(--ink-2);
+  }
+  header.top strong { color: var(--ink); font-weight: 600; }
+
+  .hero { padding: 40px 0 28px; border-bottom: 1px solid var(--border); }
+  .hero-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin: 0; }
+  .hero-figure { font-size: clamp(56px, 11vw, 96px); font-weight: 600; line-height: 1; letter-spacing: -0.02em; }
+  .hero-text { font-size: clamp(20px, 3vw, 28px); font-weight: 500; line-height: 1.25; max-width: 30ch; }
+  .hero-sub { margin: 16px 0 0; color: var(--ink-2); max-width: 70ch; }
+
+  .kpis {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0; padding: 0; border-bottom: 1px solid var(--border);
+  }
+  .kpi { padding: 20px 20px 20px 0; }
+  .kpi + .kpi { padding-left: 20px; border-left: 1px solid var(--border); }
+  .kpi dt { font-size: 13px; color: var(--ink-2); }
+  .kpi dd { margin: 4px 0 0; font-size: 26px; font-weight: 600; line-height: 1.2; }
+  .kpi .note { display: block; font-size: 13px; font-weight: 400; color: var(--ink-2); margin-top: 2px; }
+
+  section.block { padding: 40px 0; border-bottom: 1px solid var(--border); }
+  section.block h2 { font-size: 20px; font-weight: 600; margin: 0; line-height: 1.3; }
+  .lede { margin: 6px 0 20px; color: var(--ink-2); max-width: 72ch; }
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 40px; }
+  .split > div { min-width: 0; }
+  h3 { font-size: 16px; font-weight: 600; margin: 0; }
+
+  .chart {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 12px 4px;
+  }
+  .chart + .chart { margin-top: 12px; }
+  .chart-title { font-size: 13px; color: var(--ink-2); margin: 0 0 4px 4px; }
+  .chart svg { display: block; width: 100%; overflow: visible; }
+  .chart svg text { font: 12px var(--sans); fill: var(--muted); font-variant-numeric: tabular-nums; }
+  .chart svg .label { fill: var(--ink-2); }
+  .chart svg .value { fill: var(--ink); font-weight: 600; }
+  .grid-line { stroke: var(--grid); stroke-width: 1; shape-rendering: crispEdges; }
+  .baseline { stroke: var(--axis); stroke-width: 1; shape-rendering: crispEdges; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 8px 4px 8px; font-size: 13px; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .key-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .key-rect { width: 12px; height: 10px; border-radius: 2px; display: inline-block; background: var(--gap-wash); border: 1px solid var(--axis); }
+
+  .tooltip {
+    position: absolute; pointer-events: none; z-index: 2;
+    min-width: 160px; max-width: 260px;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    padding: 8px 10px; font-size: 13px; line-height: 1.4;
+    opacity: 0; transition: opacity 80ms;
+  }
+  .tooltip.on { opacity: 1; }
+  .tooltip .tt-head { color: var(--ink-2); margin-bottom: 4px; }
+  .tooltip .tt-row { display: flex; align-items: center; gap: 8px; }
+  .tooltip .tt-row b { font-weight: 600; }
+  .tooltip .tt-key { width: 12px; height: 2px; background: var(--series); flex: none; }
+  .tooltip .tt-sub { color: var(--ink-2); }
+
+  details.table-view { margin: 12px 0 0; font-size: 14px; }
+  details.table-view summary { cursor: pointer; color: var(--ink-2); width: max-content; }
+  .table-scroll { max-height: 320px; overflow: auto; margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { font-weight: 600; color: var(--ink-2); position: sticky; top: 0; background: var(--surface); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:last-child td { border-bottom: 0; }
+
+  .meter { display: inline-block; width: 72px; height: 6px; border-radius: 3px; background: var(--track); vertical-align: middle; margin-left: 8px; overflow: hidden; }
+  .meter i { display: block; height: 100%; background: var(--series); border-radius: 3px; }
+
+  .checks { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 20px 0 0; padding: 0; list-style: none; font-size: 14px; }
+  .checks li { display: inline-flex; align-items: center; gap: 8px; }
+  .status { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font-size: 12px; font-weight: 700; color: #0b0b0b; flex: none; }
+  .status.good { background: var(--good); color: #fff; }
+  .status.warning { background: var(--warning); }
+  .status.critical { background: var(--critical); color: #fff; }
+
+  footer { padding: 32px 0 48px; color: var(--ink-2); font-size: 14px; }
+  footer p { margin: 0 0 8px; max-width: 80ch; }
+
+  .empty-note { padding: 40px 0; color: var(--ink-2); }
+
+  @media (max-width: 900px) {
+    .split { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  }
+  @media (max-width: 720px) {
+    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kpi:nth-child(3) { padding-left: 0; border-left: 0; }
+    .kpi:nth-child(n + 3) { border-top: 1px solid var(--border); }
+  }
+  @media (prefers-reduced-motion: reduce) { .tooltip { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span><strong>Bike share data pipeline</strong> · live results</span>
+    <span id="updated"></span>
+  </header>
+
+  <main id="app">
+    <p class="empty-note" id="loading">Loading the latest data…</p>
+  </main>
+
+  <footer>
+    <p>An independent portfolio project, not affiliated with Citi Bike or Lyft. Station data comes from Citi Bike's public
+      <a href="https://gbfs.org/">GBFS</a> feed and weather from <a href="https://open-meteo.com/">Open-Meteo</a>.</p>
+    <p>Collected every 15 minutes, modeled with dbt and DuckDB, checked for quality, and rebuilt every hour.
+      <a href="https://github.com/DTOX10011/bikeshare-data-pipeline">How it is built</a>.</p>
+  </footer>
+</div>
+
+<script id="data" type="application/json">/*DATA*/</script>
+<script>
+(() => {
+  "use strict";
+
+  const TZ = "America/New_York";
+  const GAP_MINUTES = 45;  // a longer silence between snapshots is drawn as a gap, not a line
+  const NS = "http://www.w3.org/2000/svg";
+
+  // --- Small helpers -----------------------------------------------------------
+
+  const el = (tag, attrs = {}, text) => {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const svgEl = (tag, attrs = {}) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    return node;
+  };
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  const fmtInt = new Intl.NumberFormat("en-US");
+  const pct = (x, digits = 0) => x == null ? "–" : `${(x * 100).toFixed(digits)}%`;
+  const fmtTime = new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+  const fmtDay = new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "short", month: "short", day: "numeric" });
+  const fmtDayShort = new Intl.DateTimeFormat("en-US", { timeZone: TZ, month: "short", day: "numeric" });
+  const fmtHour = new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric" });
+  const localHour = (d) => Number(new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", hourCycle: "h23" }).format(d));
+  const when = (d) => `${fmtDay.format(d)}, ${fmtTime.format(d)}`;
+  const fahrenheit = (c) => Math.round(c * 9 / 5 + 32);
+
+  // Round tick steps (1, 2 or 5 times a power of ten) covering lo..hi in about `count` steps.
+  function niceTicks(lo, hi, count = 4) {
+    const raw = (hi - lo) / count || 1;
+    const exp = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 5, 10].map((m) => m * exp).find((s) => s >= raw);
+    const start = Math.floor(lo / step) * step, end = Math.ceil(hi / step) * step;
+    const ticks = [];
+    for (let v = start; v <= end + step / 2; v += step) ticks.push(Number(v.toFixed(10)));
+    return ticks;
+  }
+
+  // One tooltip per chart. Values are set with textContent: names come from the feed.
+  function makeTooltip(container) {
+    const tip = el("div", { class: "tooltip", role: "status", "aria-live": "polite" });
+    container.appendChild(tip);
+    return {
+      show(x, y, head, rowsList) {
+        tip.replaceChildren();
+        tip.appendChild(el("div", { class: "tt-head" }, head));
+        for (const row of rowsList) {
+          const line = el("div", { class: "tt-row" });
+          if (row.key) line.appendChild(el("span", { class: "tt-key" }));
+          line.appendChild(el("b", {}, row.value));
+          if (row.label) line.appendChild(el("span", { class: "tt-sub" }, row.label));
+          tip.appendChild(line);
+        }
+        tip.classList.add("on");
+        const box = container.getBoundingClientRect();
+        const w = tip.offsetWidth, h = tip.offsetHeight;
+        let left = x + 14, top = y - h - 10;
+        if (left + w > box.width - 4) left = x - w - 14;
+        if (left < 4) left = 4;
+        if (top < 4) top = y + 14;
+        tip.style.left = `${left}px`;
+        tip.style.top = `${top}px`;
+      },
+      hide() { tip.classList.remove("on"); },
+    };
+  }
+
+  function tableView(summaryText, headers, bodyRows) {
+    const details = el("details", { class: "table-view" });
+    details.appendChild(el("summary", {}, summaryText));
+    details.addEventListener("toggle", () => {
+      if (!details.open || details.dataset.built) return;
+      details.dataset.built = "1";
+      const scroll = el("div", { class: "table-scroll" });
+      const table = el("table");
+      const thead = el("thead"), tr = el("tr");
+      for (const h of headers) tr.appendChild(el("th", h.num ? { class: "num", scope: "col" } : { scope: "col" }, h.label));
+      thead.appendChild(tr);
+      const tbody = el("tbody");
+      for (const r of bodyRows()) {
+        const row = el("tr");
+        r.forEach((cell, i) => row.appendChild(el("td", headers[i].num ? { class: "num" } : {}, cell)));
+        tbody.appendChild(row);
+      }
+      table.append(thead, tbody);
+      scroll.appendChild(table);
+      details.appendChild(scroll);
+    });
+    return details;
+  }
+
+  // Redraw on resize without piling up work.
+  const redrawers = [];
+  let resizeTimer;
+  new ResizeObserver(() => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => redrawers.forEach((fn) => fn()), 120);
+  }).observe(document.body);
+
+  // --- Time-series line chart --------------------------------------------------
+  //
+  // points: [{t: Date, y: number|null, ...}]. A silence longer than GAP_MINUTES between two
+  // points breaks the line and is shaded, so missing collection never looks like data.
+
+  function lineChart(container, { points, domain, yTicks, yFormat, height, tooltip, ariaLabel, area = true }) {
+    const yMin = yTicks[0], yMax = yTicks[yTicks.length - 1];
+    const svg = svgEl("svg", { role: "img", "aria-label": ariaLabel });
+    container.appendChild(svg);
+    const tip = makeTooltip(container);
+    const margin = { top: 10, right: 12, bottom: 26, left: 44 };
+
+    function draw() {
+      svg.replaceChildren();
+      const width = Math.max(280, container.clientWidth - 24);
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      svg.setAttribute("height", height);
+      const plotW = width - margin.left - margin.right;
+      const plotH = height - margin.top - margin.bottom;
+      const [t0, t1] = domain;
+      const x = (t) => margin.left + ((t - t0) / (t1 - t0 || 1)) * plotW;
+      const y = (v) => margin.top + plotH - ((v - yMin) / (yMax - yMin || 1)) * plotH;
+
+      // Gridlines and y ticks.
+      for (const v of yTicks) {
+        svg.appendChild(svgEl("line", { class: v === yMin ? "baseline" : "grid-line", x1: margin.left, x2: width - margin.right, y1: y(v), y2: y(v) }));
+        const label = svgEl("text", { x: margin.left - 8, y: y(v) + 4, "text-anchor": "end" });
+        label.textContent = yFormat(v);
+        svg.appendChild(label);
+      }
+
+      // X ticks: local midnights labelled with the day, plus 6 am, noon and 6 pm.
+      const hourMs = 3600e3;
+      const minLabelGap = 56;
+      let lastLabelX = -Infinity;
+      for (let t = Math.ceil(t0 / hourMs) * hourMs; t <= t1; t += hourMs) {
+        const d = new Date(t), h = localHour(d);
+        if (h % 6 !== 0) continue;
+        const px = x(t);
+        if (h === 0) svg.appendChild(svgEl("line", { class: "grid-line", x1: px, x2: px, y1: margin.top, y2: margin.top + plotH }));
+        if (px - lastLabelX < minLabelGap) continue;
+        const label = svgEl("text", { x: px, y: height - 8, "text-anchor": "middle" });
+        label.textContent = h === 0 ? fmtDayShort.format(d) : fmtHour.format(d).replace(" ", "").toLowerCase();
+        if (h === 0) label.setAttribute("class", "label");
+        svg.appendChild(label);
+        lastLabelX = px;
+      }
+
+      // Split into runs at each long silence, and shade the silences.
+      const runs = [];
+      let run = [];
+      points.forEach((p, i) => {
+        const prev = points[i - 1];
+        if (prev && (p.t - prev.t) / 60e3 > GAP_MINUTES) {
+          svg.appendChild(svgEl("rect", { x: x(prev.t), y: margin.top, width: Math.max(1, x(p.t) - x(prev.t)), height: plotH, fill: "var(--gap-wash)" }));
+          runs.push(run);
+          run = [];
+        }
+        if (p.y != null) run.push(p);
+      });
+      runs.push(run);
+
+      for (const r of runs) {
+        if (r.length === 1) {
+          svg.appendChild(svgEl("circle", { cx: x(r[0].t), cy: y(r[0].y), r: 2.5, fill: "var(--series)" }));
+          continue;
+        }
+        if (r.length < 2) continue;
+        const d = r.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.y).toFixed(1)}`).join("");
+        if (area) svg.appendChild(svgEl("path", {
+          d: `${d}L${x(r[r.length - 1].t).toFixed(1)},${y(yMin)}L${x(r[0].t).toFixed(1)},${y(yMin)}Z`,
+          fill: "var(--series-wash)",
+        }));
+        svg.appendChild(svgEl("path", { d, fill: "none", stroke: "var(--series)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+      }
+
+      // Direct label on the newest value.
+      const last = [...points].reverse().find((p) => p.y != null);
+      if (last) {
+        svg.appendChild(svgEl("circle", { cx: x(last.t), cy: y(last.y), r: 4, fill: "var(--series)", stroke: "var(--surface)", "stroke-width": 2 }));
+        const label = svgEl("text", { x: x(last.t) - 8, y: y(last.y) - 10, "text-anchor": "end", class: "value" });
+        label.textContent = yFormat(last.y, true);
+        svg.appendChild(label);
+      }
+
+      // Crosshair: snaps to the nearest point. Works with the pointer and the arrow keys.
+      const cross = svgEl("line", { class: "baseline", y1: margin.top, y2: margin.top + plotH, visibility: "hidden" });
+      const dot = svgEl("circle", { r: 4, fill: "var(--series)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" });
+      svg.append(cross, dot);
+      const hit = svgEl("rect", { x: margin.left, y: margin.top, width: plotW, height: plotH, fill: "transparent", tabindex: 0, "aria-label": `${ariaLabel}. Use the arrow keys to read values.` });
+      svg.appendChild(hit);
+
+      let index = points.length - 1;
+      const showAt = (i) => {
+        index = Math.max(0, Math.min(points.length - 1, i));
+        const p = points[index];
+        const px = x(p.t);
+        cross.setAttribute("x1", px); cross.setAttribute("x2", px); cross.setAttribute("visibility", "visible");
+        if (p.y != null) { dot.setAttribute("cx", px); dot.setAttribute("cy", y(p.y)); dot.setAttribute("visibility", "visible"); }
+        else dot.setAttribute("visibility", "hidden");
+        const t = tooltip(p);
+        tip.show(px + 12, (p.y != null ? y(p.y) : margin.top) + 12, t.head, t.rows);
+      };
+      const hide = () => { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.hide(); };
+      const nearest = (px) => {
+        const t = t0 + ((px - margin.left) / plotW) * (t1 - t0);
+        let best = 0;
+        points.forEach((p, i) => { if (Math.abs(p.t - t) < Math.abs(points[best].t - t)) best = i; });
+        return best;
+      };
+      hit.addEventListener("pointermove", (e) => {
+        const box = svg.getBoundingClientRect();
+        showAt(nearest(((e.clientX - box.left) / box.width) * width));
+      });
+      hit.addEventListener("pointerleave", hide);
+      hit.addEventListener("focus", () => showAt(index));
+      hit.addEventListener("blur", hide);
+      hit.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowLeft") { showAt(index - 1); e.preventDefault(); }
+        if (e.key === "ArrowRight") { showAt(index + 1); e.preventDefault(); }
+      });
+    }
+
+    draw();
+    redrawers.push(draw);
+  }
+
+  // --- Horizontal bar chart ----------------------------------------------------
+
+  function barChart(container, { items, value, label, format, tooltip, ariaLabel }) {
+    const svg = svgEl("svg", { role: "img", "aria-label": ariaLabel });
+    container.appendChild(svg);
+    const tip = makeTooltip(container);
+    const rowH = 34, barH = 14, top = 6;
+
+    function draw() {
+      svg.replaceChildren();
+      const width = Math.max(280, container.clientWidth - 24);
+      const labelW = Math.min(220, Math.max(120, width * 0.42));
+      const valueW = 48;
+      const plotW = width - labelW - valueW;
+      const height = top + items.length * rowH;
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      svg.setAttribute("height", height);
+      svg.appendChild(svgEl("line", { class: "baseline", x1: labelW, x2: labelW, y1: 0, y2: height }));
+
+      items.forEach((item, i) => {
+        const cy = top + i * rowH + rowH / 2;
+        const g = svgEl("g", { tabindex: 0, role: "listitem", "aria-label": `${label(item)}: ${format(value(item))}` });
+        // The whole row is the hover target, not just the painted bar.
+        g.appendChild(svgEl("rect", { x: 0, y: cy - rowH / 2, width, height: rowH, fill: "transparent" }));
+        const name = svgEl("text", { x: labelW - 10, y: cy + 4, "text-anchor": "end", class: "label" });
+        let text = label(item);
+        name.textContent = text;
+        g.appendChild(name);
+        const w = Math.max(2, value(item) * plotW);
+        // Rounded at the data end, square at the baseline.
+        const r = Math.min(4, w / 2);
+        const x0 = labelW, x1 = labelW + w, y0 = cy - barH / 2, y1 = cy + barH / 2;
+        g.appendChild(svgEl("path", {
+          d: `M${x0},${y0}H${x1 - r}Q${x1},${y0} ${x1},${y0 + r}V${y1 - r}Q${x1},${y1} ${x1 - r},${y1}H${x0}Z`,
+          fill: "var(--series)",
+        }));
+        const val = svgEl("text", { x: x1 + 8, y: cy + 4, class: "value" });
+        val.textContent = format(value(item));
+        g.appendChild(val);
+        svg.appendChild(g);
+        // Shorten names that do not fit, keeping the full name in the tooltip and table.
+        while (name.getComputedTextLength() > labelW - 16 && text.length > 4) {
+          text = text.slice(0, -2);
+          name.textContent = `${text.trimEnd()}…`;
+        }
+        const show = () => {
+          const t = tooltip(item);
+          tip.show(x1, cy, t.head, t.rows);
+        };
+        g.addEventListener("pointerenter", show);
+        g.addEventListener("pointerleave", () => tip.hide());
+        g.addEventListener("focus", show);
+        g.addEventListener("blur", () => tip.hide());
+      });
+      svg.setAttribute("role", "list");
+    }
+
+    draw();
+    redrawers.push(draw);
+  }
+
+  // --- Station map -------------------------------------------------------------
+
+  const BINS = [
+    { max: 0, color: "--never", label: "Never empty" },
+    { max: 0.10, color: "--ramp-1", label: "Up to 10%" },
+    { max: 0.25, color: "--ramp-2", label: "10 to 25%" },
+    { max: 0.50, color: "--ramp-3", label: "25 to 50%" },
+    { max: 1.00, color: "--ramp-4", label: "Over 50%" },
+  ];
+  const binOf = (share) => BINS.findIndex((b) => share <= b.max);
+
+  function stationMap(container, { stations, ariaLabel }) {
+    const svg = svgEl("svg", { role: "img", "aria-label": ariaLabel });
+    container.appendChild(svg);
+    const tip = makeTooltip(container);
+    const lons = stations.map((s) => s[0]), lats = stations.map((s) => s[1]);
+    const [lonMin, lonMax] = [Math.min(...lons), Math.max(...lons)];
+    const [latMin, latMax] = [Math.min(...lats), Math.max(...lats)];
+    // Longitude degrees are shorter than latitude degrees this far north.
+    const kx = Math.cos(((latMin + latMax) / 2) * Math.PI / 180);
+    const spanX = (lonMax - lonMin) * kx, spanY = latMax - latMin;
+
+    function draw() {
+      svg.replaceChildren();
+      const width = Math.max(280, container.clientWidth - 24);
+      const pad = 8;
+      const scale = Math.min((width - 2 * pad) / spanX, 560 / spanY);
+      const height = Math.ceil(spanY * scale + 2 * pad);
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      svg.setAttribute("height", height);
+      const offsetX = (width - spanX * scale) / 2;
+      const px = (lon) => offsetX + (lon - lonMin) * kx * scale;
+      const py = (lat) => pad + (latMax - lat) * scale;
+      const radius = width < 480 ? 1.8 : 2.4;
+
+      // Stations come sorted from never empty to most often empty, so the stations that
+      // matter are drawn last and sit on top.
+      const placed = stations.map((s) => ({ x: px(s[0]), y: py(s[1]), s }));
+      for (const p of placed) {
+        svg.appendChild(svgEl("circle", { cx: p.x.toFixed(1), cy: p.y.toFixed(1), r: radius, fill: `var(${BINS[binOf(p.s[2])].color})` }));
+      }
+      const ring = svgEl("circle", { r: 6, fill: "none", stroke: "var(--ink)", "stroke-width": 1.5, visibility: "hidden" });
+      svg.appendChild(ring);
+
+      // The pointer only has to be closest to a station, not on it.
+      svg.addEventListener("pointermove", (e) => {
+        const box = svg.getBoundingClientRect();
+        const mx = ((e.clientX - box.left) / box.width) * width, my = ((e.clientY - box.top) / box.height) * height;
+        let best = null, bestD = 18 * 18;
+        for (const p of placed) {
+          const d = (p.x - mx) ** 2 + (p.y - my) ** 2;
+          if (d < bestD) { bestD = d; best = p; }
+        }
+        if (!best) { ring.setAttribute("visibility", "hidden"); tip.hide(); return; }
+        ring.setAttribute("cx", best.x); ring.setAttribute("cy", best.y); ring.setAttribute("visibility", "visible");
+        tip.show(best.x, best.y, best.s[3], [{ value: pct(best.s[2]), label: "of the time empty" }]);
+      });
+      svg.addEventListener("pointerleave", () => { ring.setAttribute("visibility", "hidden"); tip.hide(); });
+    }
+
+    draw();
+    redrawers.push(draw);
+  }
+
+  // --- The page ----------------------------------------------------------------
+
+  function section(title, lede) {
+    const s = el("section", { class: "block" });
+    s.appendChild(el("h2", {}, title));
+    if (lede) s.appendChild(el("p", { class: "lede" }, lede));
+    return s;
+  }
+
+  function render(data) {
+    const app = document.getElementById("app");
+    app.replaceChildren();
+    const latest = new Date(data.coverage.latest_snapshot);
+    const generated = new Date(data.generated_at);
+    document.getElementById("updated").textContent = `Updated ${when(generated)} New York time`;
+
+    // Hero: the one number the page leads with.
+    const now = data.now;
+    const hero = el("section", { class: "hero" });
+    const line = el("p", { class: "hero-line" });
+    line.appendChild(el("span", { class: "hero-figure" }, fmtInt.format(now.empty_stations)));
+    const heroText = el("span", { class: "hero-text" }, `of ${fmtInt.format(now.open_stations)} open stations had no bikes `);
+    heroText.appendChild(el("span", { style: "white-space:nowrap" }, `at ${fmtTime.format(latest)}`));
+    line.appendChild(heroText);
+    hero.appendChild(line);
+    hero.appendChild(el("p", { class: "hero-sub" },
+      `${fmtInt.format(now.bikes_available)} bikes were docked across the system, ${fmtInt.format(now.ebikes_available)} of them e-bikes. ` +
+      `Every number here comes from snapshots of every station's status, collected every 15 minutes since ${fmtDay.format(new Date(data.coverage.first_snapshot))}.`));
+    app.appendChild(hero);
+
+    // KPI row.
+    const dayAgo = latest - 24 * 3600e3;
+    const last24 = data.timeline.filter((p) => new Date(p.t) > dayAgo).length;
+    const weatherNow = data.weather.length ? data.weather[data.weather.length - 1] : null;
+    const kpis = el("dl", { class: "kpis" });
+    const kpi = (label, value, note) => {
+      const box = el("div", { class: "kpi" });
+      box.appendChild(el("dt", {}, label));
+      const dd = el("dd", {}, value);
+      if (note) dd.appendChild(el("span", { class: "note" }, note));
+      box.appendChild(dd);
+      kpis.appendChild(box);
+    };
+    kpi("Stations with no free docks", fmtInt.format(now.full_stations), "riders cannot return a bike there");
+    kpi("Snapshots in the last 24 hours", `${last24} of 96`, "one every 15 minutes is 96 a day");
+    kpi("Snapshots collected", fmtInt.format(data.coverage.snapshots), `${fmtInt.format(data.coverage.stations)} stations tracked`);
+    if (weatherNow) {
+      const rain = weatherNow.precipitation_mm > 0 ? `${weatherNow.precipitation_mm} mm of rain` : "no rain";
+      kpi("Weather in Manhattan", `${Math.round(weatherNow.temperature_c)}°C`, `${fahrenheit(weatherNow.temperature_c)}°F, ${rain}`);
+    }
+    app.appendChild(kpis);
+
+    // Section: how empty the system gets, and the weather alongside.
+    const timeline = data.timeline.map((p) => ({ ...p, t: new Date(p.t), y: p.share_empty }));
+    const weather = data.weather.map((w) => ({ ...w, t: new Date(w.t), y: w.temperature_c }));
+    const domain = [
+      Math.min(timeline[0].t, weather.length ? weather[0].t : Infinity),
+      Math.max(latest, weather.length ? weather[weather.length - 1].t : 0),
+    ];
+    const s1 = section("How empty the system gets",
+      "Share of open stations with no bikes, at every snapshot over the last three days. Shaded stretches are times when nothing was collected: until 12 October GitHub's own scheduler started collection only every few hours.");
+    const c1 = el("div", { class: "chart" });
+    c1.appendChild(el("p", { class: "chart-title" }, "Open stations with no bikes"));
+    s1.appendChild(c1);
+    const shareTicks = niceTicks(0, Math.max(0.01, ...timeline.map((p) => p.y || 0)) * 1.1);
+    lineChart(c1, {
+      points: timeline, domain, yTicks: shareTicks,
+      yFormat: (v, exact) => pct(v, exact || shareTicks[1] < 0.01 ? 1 : 0), height: 240,
+      ariaLabel: "Line chart of the share of open stations with no bikes over the last three days",
+      tooltip: (p) => ({
+        head: when(p.t),
+        rows: [
+          { key: true, value: pct(p.y, 1), label: "of open stations empty" },
+          { value: `${fmtInt.format(p.empty)} of ${fmtInt.format(p.open)}`, label: "stations" },
+          { value: fmtInt.format(p.bikes), label: "bikes docked" },
+        ],
+      }),
+    });
+    const legend = el("div", { class: "legend" });
+    const gapKey = el("span"); gapKey.append(el("i", { class: "key-rect" }), document.createTextNode("No data collected"));
+    legend.appendChild(gapKey);
+    c1.appendChild(legend);
+
+    if (weather.length) {
+      const c2 = el("div", { class: "chart" });
+      c2.appendChild(el("p", { class: "chart-title" }, "Temperature in Manhattan, °C"));
+      s1.appendChild(c2);
+      const tMin = Math.min(...weather.map((w) => w.y)), tMax = Math.max(...weather.map((w) => w.y));
+      // Temperature has no meaningful zero, so the axis spans the readings, not 0 upwards.
+      lineChart(c2, {
+        points: weather, domain, yTicks: niceTicks(tMin - 1, tMax + 1, 3), area: false,
+        yFormat: (v, exact) => exact ? `${v.toFixed(1)}°` : `${Math.round(v)}°`, height: 150,
+        ariaLabel: `Line chart of temperature, from ${tMin} to ${tMax} degrees Celsius`,
+        tooltip: (w) => ({
+          head: when(w.t),
+          rows: [
+            { key: true, value: `${w.y.toFixed(1)}°C`, label: `${fahrenheit(w.y)}°F` },
+            { value: w.precipitation_mm > 0 ? `${w.precipitation_mm} mm` : "No rain", label: w.precipitation_mm > 0 ? "rain" : "" },
+          ],
+        }),
+      });
+    }
+    s1.appendChild(tableView("Show the snapshots as a table",
+      [{ label: "Snapshot (New York time)" }, { label: "Open stations", num: true }, { label: "Empty", num: true }, { label: "Share empty", num: true }, { label: "Bikes docked", num: true }],
+      () => [...data.timeline].reverse().map((p) => [when(new Date(p.t)), fmtInt.format(p.open), fmtInt.format(p.empty), pct(p.share_empty, 1), fmtInt.format(p.bikes)])));
+    app.appendChild(s1);
+
+    // Section: which stations, and where.
+    const s2 = section("Which stations run empty",
+      `Share of the time each station was open but had no bikes, over the last ${data.ranking.days} days. A station counts only if it was open in at least half of the snapshots.`);
+    const split = el("div", { class: "split" });
+    const left = el("div"), right = el("div");
+    left.appendChild(el("h3", {}, "Empty most often"));
+    const c3 = el("div", { class: "chart", style: "margin-top:12px" });
+    left.appendChild(c3);
+    barChart(c3, {
+      items: data.ranking.stations, value: (s) => s.share_empty, label: (s) => s.name, format: (v) => pct(v),
+      ariaLabel: "Bar chart of the ten stations empty most often",
+      tooltip: (s) => ({
+        head: s.name,
+        rows: [
+          { value: pct(s.share_empty, 1), label: "of the time empty" },
+          { value: fmtInt.format(s.open_snapshots), label: "snapshots while open" },
+          { value: s.capacity == null ? "–" : fmtInt.format(s.capacity), label: "docks" },
+        ],
+      }),
+    });
+    left.appendChild(tableView("Show as a table",
+      [{ label: "Station" }, { label: "Time empty", num: true }, { label: "Snapshots open", num: true }, { label: "Docks", num: true }],
+      () => data.ranking.stations.map((s) => [s.name, pct(s.share_empty, 1), fmtInt.format(s.open_snapshots), s.capacity == null ? "–" : String(s.capacity)])));
+
+    right.appendChild(el("h3", {}, "Where they are"));
+    const c4 = el("div", { class: "chart", style: "margin-top:12px" });
+    right.appendChild(c4);
+    stationMap(c4, { stations: data.map, ariaLabel: `Map of ${data.map.length} stations shaded by how often each was empty` });
+    const mapLegend = el("div", { class: "legend" });
+    BINS.forEach((b, i) => {
+      const count = data.map.filter((s) => binOf(s[2]) === i).length;
+      const item = el("span");
+      item.append(el("i", { class: "key-dot", style: `background: var(${b.color})` }), document.createTextNode(`${b.label} (${fmtInt.format(count)})`));
+      mapLegend.appendChild(item);
+    });
+    c4.appendChild(mapLegend);
+    right.appendChild(tableView("Show every station as a table",
+      [{ label: "Station" }, { label: "Time empty", num: true }],
+      () => [...data.map].reverse().map((s) => [s[3], pct(s[2], 1)])));
+    split.append(left, right);
+    s2.appendChild(split);
+    app.appendChild(s2);
+
+    // Section: data health.
+    const s3 = section("Data health",
+      "How complete each day's data is, and the result of the pipeline's quality checks at the latest build. A full day at one snapshot every 15 minutes has 96.");
+    const scroll = el("div", { class: "table-scroll", style: "max-height:none" });
+    const table = el("table");
+    const head = el("tr");
+    [["Day (UTC)"], ["Snapshots", true], ["Longest gap", true], ["Failed runs", true], ["Rejected rows", true], ["Unreadable values", true]]
+      .forEach(([label, num]) => head.appendChild(el("th", num ? { class: "num", scope: "col" } : { scope: "col" }, label)));
+    const thead = el("thead"); thead.appendChild(head);
+    const tbody = el("tbody");
+    const latestDay = data.coverage.latest_snapshot.slice(0, 10);
+    for (const d of data.health.days) {
+      const tr = el("tr");
+      tr.appendChild(el("td", {}, d.day + (d.day === latestDay ? " (so far)" : "")));
+      const snaps = el("td", { class: "num" }, `${d.status_snapshots}`);
+      const meter = el("span", { class: "meter", "aria-hidden": "true" });
+      meter.appendChild(el("i", { style: `width:${Math.min(100, d.share_of_expected_snapshots * 100)}%` }));
+      snaps.appendChild(meter);
+      tr.appendChild(snaps);
+      const gap = d.longest_gap_minutes;
+      tr.appendChild(el("td", { class: "num" }, gap == null ? "–" : gap >= 120 ? `${(gap / 60).toFixed(1)} h` : `${gap} min`));
+      tr.appendChild(el("td", { class: "num" }, String(d.failed_source_results)));
+      tr.appendChild(el("td", { class: "num" }, String(d.quarantined_rows)));
+      tr.appendChild(el("td", { class: "num" }, String(d.unreadable_values)));
+      tbody.appendChild(tr);
+    }
+    table.append(thead, tbody);
+    scroll.appendChild(table);
+    s3.appendChild(scroll);
+
+    const checks = data.health.checks;
+    if (checks.length) {
+      const passed = checks.filter((c) => c.status === "pass").length;
+      const flagged = checks.filter((c) => c.status !== "pass");
+      const list = el("ul", { class: "checks" });
+      const item = (kind, symbol, text) => {
+        const li = el("li");
+        li.append(el("span", { class: `status ${kind}`, "aria-hidden": "true" }, symbol), document.createTextNode(text));
+        list.appendChild(li);
+      };
+      item("good", "✓", `${passed} of ${checks.length} checks passed`);
+      for (const c of flagged) {
+        const kind = c.status === "warn" ? "warning" : "critical";
+        item(kind, c.status === "warn" ? "!" : "×", `${c.status === "warn" ? "Warning" : "Failed"}: ${checkName(c.name)}`);
+      }
+      s3.appendChild(list);
+    }
+    app.appendChild(s3);
+  }
+
+  // Plain-language names for the quality checks (see transform/tests/ in the repository).
+  const CHECK_NAMES = {
+    assert_station_status_is_fresh: "the newest snapshot is over an hour old",
+    assert_no_long_gaps_between_snapshots: "gaps of over 45 minutes between snapshots in the last 24 hours",
+    assert_no_failed_collections: "a collection run failed in the last 24 hours",
+    assert_no_recent_quarantined_rows: "station rows were rejected in the last 24 hours",
+    assert_unreadable_values_are_rare: "more unreadable values than usual",
+    assert_capacity_is_mostly_respected: "more stations than usual over capacity",
+    assert_open_stations_are_reporting: "open stations have stopped reporting",
+    assert_ebikes_within_total_bikes: "a station reported more e-bikes than bikes",
+  };
+  const checkName = (name) => CHECK_NAMES[name] || name.replace(/^assert_/, "").replaceAll("_", " ");
+
+  function fail(message) {
+    const app = document.getElementById("app");
+    app.replaceChildren(el("p", { class: "empty-note" }, message));
+  }
+
+  // The site build writes the data into the page. Opened from the template, fetch it instead.
+  const embedded = document.getElementById("data").textContent.trim();
+  const load = embedded && !embedded.startsWith("/*")
+    ? Promise.resolve(JSON.parse(embedded))
+    : fetch("data.json").then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
+  load.then((data) => {
+    if (!data.timeline || !data.timeline.length) return fail("No snapshots have been collected yet.");
+    render(data);
+  }).catch(() => fail("The latest data could not be loaded. Try again in a few minutes."));
+})();
+</script>
+</body>
+</html>
