@@ -1,0 +1,3 @@
+# What building the warehouse and the dashboard needs (used by the dashboard workflow).
+-r requirements-ingest.txt
+dbt-duckdb>=1.11,<2

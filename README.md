@@ -4,7 +4,9 @@ A data pipeline that collects live bike share station data and weather, stores i
 
 Bike share systems publish how many bikes and docks every station has, refreshed about once a minute. Each refresh replaces the last, so the history is lost unless someone collects it. This pipeline collects it, alongside the weather at the time, and the goal is to answer questions such as which stations run empty, when, and how weather changes demand.
 
-**Status: in progress.** Milestones 1 to 5 are built and tested: raw ingestion, weather, scheduled collection, the SQL model, data quality checks, and orchestration with Dagster. Packaging and a dashboard are next, and this README is updated as each stage lands.
+**Live dashboard: [dtox10011.github.io/bikeshare-data-pipeline](https://dtox10011.github.io/bikeshare-data-pipeline/)**, rebuilt from the collected data every hour.
+
+**Status: in progress.** Milestones 1 to 5 and the dashboard are built and tested: raw ingestion, weather, scheduled collection, the SQL model, data quality checks, orchestration with Dagster, and a public dashboard. Docker packaging is next.
 
 ## Architecture
 
@@ -23,7 +25,8 @@ flowchart LR
     E --> G[Data quality checks<br>errors and warnings]
     Q --> G
     O[Dagster<br>hourly refresh, retries, backfills] --> D
-    E -.-> F[Dashboard]
+    E --> F[Dashboard<br>GitHub Pages, hourly]
+    Q --> F
 ```
 
 Solid lines are built. Dotted lines are planned.
@@ -37,7 +40,7 @@ Solid lines are built. Dotted lines are planned.
 | 3 | Staging views and an analytics model in SQL (dbt + DuckDB) | Done |
 | 4 | Data quality checks, quarantine, and a daily quality summary | Done |
 | 5 | Reliable 15-minute collection, and orchestration with Dagster (schedule, retries, backfills) | Done |
-| 6 | Docker packaging and a dashboard | Planned |
+| 6 | A public dashboard, and Docker packaging | Dashboard done; Docker packaging next |
 
 ## What it collects
 
@@ -216,6 +219,25 @@ dagster dev                                    # then open http://localhost:3000
 python -m pipeline.transform --backfill 2026-10-01 2026-10-03
 ```
 
+## Dashboard
+
+The [dashboard](https://dtox10011.github.io/bikeshare-data-pipeline/) shows how many stations are empty right now, how the share of empty stations moved over the last three days next to the temperature, which stations were empty most often over the last week and where they are, and a data health panel with each day's completeness and the latest check results.
+
+The [`dashboard`](.github/workflows/dashboard.yml) workflow rebuilds it once an hour, after the collection run that starts in the first quarter of each hour:
+
+1. Check out the `data` branch and restore the previous build's warehouse from the Actions cache, so the build only loads the newest days. A change to the SQL models changes the cache key and forces a full rebuild.
+2. Run `python -m pipeline.transform`, which builds every table and runs every check.
+3. Run `python -m pipeline.dashboard`, which reads the warehouse and writes the site: one HTML page with the data embedded, plus the same data as `data.json`.
+4. Publish the site to GitHub Pages.
+
+To build it locally after `python -m pipeline.transform`:
+
+```bash
+python -m pipeline.dashboard    # writes site/index.html; open it in a browser
+```
+
+The page has no dependencies and loads nothing from other sites. Every chart has a table view, works with the keyboard, and follows the system's light or dark setting. Gaps in collection are drawn as shaded stretches, never as a line across missing time.
+
 ## The run log
 
 Every run appends one line to `run_log/dt=YYYY-MM-DD/runs.jsonl`:
@@ -263,7 +285,9 @@ Each source ends a run with one of four statuses:
 
 **A scheduler is judged by what it delivers.** GitHub's schedule was kept until the run log showed it missing most of its slots. The fix changes only what starts the workflow; collection itself, and everything after it, stayed the same.
 
-**Collection runs in the cloud, the warehouse runs where it is used.** Collecting must never stop, so it runs on GitHub. Building the warehouse can catch up at any time from the raw files, so Dagster runs it hourly on the machine that queries it.
+**The dashboard is a static page.** It is rebuilt from the warehouse and published as files, so there is no server to keep running and nothing to break between builds. Station names come from the feed, so the page inserts all text as text, never as HTML.
+
+**Collection runs in the cloud, and the warehouse can be rebuilt anywhere.** Collecting must never stop, so it runs on GitHub. The warehouse can always catch up from the raw files, so it is built wherever it is needed: hourly by Dagster on the machine that queries it, and hourly in the dashboard workflow for the public page.
 
 **Every fact row has a station to join to.** A station that reports status before its reference data arrives gets a placeholder row in `dim_station`, flagged `is_inferred`. A later run fills in its details.
 

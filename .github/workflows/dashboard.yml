@@ -1,0 +1,97 @@
+name: dashboard
+
+# Rebuilds the warehouse from the data branch and publishes the dashboard to GitHub Pages,
+# once an hour: after the collection run that starts in the first quarter of each hour.
+# Collection itself is started every 15 minutes by an outside cron service, which makes it
+# a more dependable clock than GitHub's own schedule.
+
+on:
+  workflow_run:
+    workflows: [collect]
+    types: [completed]
+  workflow_dispatch:  # also allows a manual rebuild from the Actions tab
+
+permissions:
+  contents: read
+  pages: write      # to publish the site
+  id-token: write   # GitHub Pages checks the deployment came from this workflow
+
+concurrency:
+  group: dashboard
+  cancel-in-progress: true  # only the newest build matters
+
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - id: decide
+        run: |
+          minute=$((10#$(date -u +%M)))
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.workflow_run.conclusion }}" = "success" ] && [ "$minute" -lt 15 ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Not the first collection of the hour; skipping the rebuild."
+          fi
+
+  build:
+    needs: decide
+    if: needs.decide.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the pipeline code
+        uses: actions/checkout@v4
+
+      - name: Check out the collected data
+        uses: actions/checkout@v4
+        with:
+          ref: data
+          path: collected
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-warehouse.txt
+
+      - run: python -m pip install -r requirements-warehouse.txt
+
+      # The warehouse from the previous build, so this one only loads the newest days.
+      # A change to the SQL models changes the key, which forces a full rebuild.
+      - name: Restore the previous warehouse
+        uses: actions/cache/restore@v4
+        with:
+          path: build/warehouse.duckdb
+          key: warehouse-${{ hashFiles('transform/**') }}-${{ github.run_id }}
+          restore-keys: warehouse-${{ hashFiles('transform/**') }}-
+
+      - name: Build the warehouse and run the checks
+        run: python -m pipeline.transform --raw-dir collected/raw --warehouse build/warehouse.duckdb
+
+      - name: Save the warehouse for the next build
+        uses: actions/cache/save@v4
+        with:
+          path: build/warehouse.duckdb
+          key: warehouse-${{ hashFiles('transform/**') }}-${{ github.run_id }}
+
+      - name: Build the dashboard
+        run: python -m pipeline.dashboard --warehouse build/warehouse.duckdb --out site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

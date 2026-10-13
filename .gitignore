@@ -26,3 +26,6 @@ logs/
 # Dagster's local run history
 .tmp_dagster_home_*/
 dagster_home/
+
+# The dashboard site built by python -m pipeline.dashboard
+site/
